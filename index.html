@@ -1174,11 +1174,14 @@
     yt.href = href;
     modal.classList.add('open');
     document.documentElement.style.overflow = 'hidden';
+    document.dispatchEvent(new Event('videoopen'));
   }
   function close(){
+    var wasOpen = modal.classList.contains('open');
     modal.classList.remove('open');
     box.innerHTML = '';
     document.documentElement.style.overflow = '';
+    if(wasOpen) document.dispatchEvent(new Event('videoclose'));
   }
   cards.forEach(function(c){
     c.addEventListener('click', function(e){
@@ -1538,13 +1541,14 @@
   document.addEventListener('startmusic', function(){ if(!playing) start(); });
   document.addEventListener('themechange', function(e){ switchStyle(themeToStyle(e.detail)); });
   /* --- восстановление звука после ухода со страницы / блокировки экрана --- */
+  var holdForVideo = false;
   function syncUI(){
-    var stalled = playing && ctx && ctx.state !== 'running' && !document.hidden;
+    var stalled = playing && ctx && (holdForVideo || (ctx.state !== 'running' && !document.hidden));
     btn.classList.toggle('stalled', !!stalled);
   }
   function ensureTimer(){ clearInterval(timer); timer = setInterval(pump, 50); }
   function recover(){
-    if(!ctx || !playing || document.hidden) return;
+    if(!ctx || !playing || document.hidden || holdForVideo) return;
     if(ctx.state === 'running'){ if(!timer) ensureTimer(); syncUI(); return; }
     var p;
     try{ p = ctx.resume(); }catch(e){ return; }
@@ -1557,7 +1561,7 @@
     syncUI();
   }
   document.addEventListener('visibilitychange', function(){
-    if(!ctx || !playing) return;
+    if(!ctx || !playing || holdForVideo) return;
     if(document.hidden){
       clearInterval(timer); timer = null;
       try{ ctx.suspend(); }catch(e){}
@@ -1565,6 +1569,37 @@
       nextTime = ctx.currentTime + 0.1;
       recover();
     }
+  });
+  /* --- пока открыт видеоролик: музыка тихо ставится на паузу, после закрытия продолжается --- */
+  document.addEventListener('videoopen', function(){
+    if(!ctx || !playing || holdForVideo) return;
+    holdForVideo = true;
+    clearInterval(timer); timer = null;
+    var t = ctx.currentTime;
+    master.gain.cancelScheduledValues(t);
+    master.gain.setValueAtTime(master.gain.value, t);
+    master.gain.linearRampToValueAtTime(0, t + 0.5);
+    setTimeout(function(){ if(holdForVideo){ try{ ctx.suspend(); }catch(e){} } }, 650);
+    syncUI();
+  });
+  document.addEventListener('videoclose', function(){
+    if(!holdForVideo) return;
+    holdForVideo = false;
+    if(!playing || !ctx){ syncUI(); return; }
+    var rp;
+    try{ rp = ctx.resume(); }catch(e){}
+    var go = function(){
+      if(!playing || holdForVideo) return;
+      var t = ctx.currentTime;
+      master.gain.cancelScheduledValues(t);
+      master.gain.setValueAtTime(0, t);
+      master.gain.linearRampToValueAtTime(S.vol, t + 0.9);
+      nextTime = t + 0.1;
+      ensureTimer();
+      syncUI();
+    };
+    if(rp && rp.then){ rp.then(go).catch(function(){ syncUI(); }); } else { go(); }
+    syncUI();
   });
   window.addEventListener('pageshow', recover);
   window.addEventListener('focus', recover);
